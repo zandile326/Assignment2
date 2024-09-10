@@ -10,15 +10,13 @@ import java.util.concurrent.CountDownLatch;
 
 
 
-
-
 public class Swimmer extends Thread {
 
     public static StadiumGrid stadium; // shared 
     private FinishCounter finish; // shared
 
     private static final CyclicBarrier[] barriers = new CyclicBarrier[4]; // One barrier for each swim stroke set
-    private static final CyclicBarrier finishLineBarrier = new CyclicBarrier(10); // Barrier for finish line synchronization
+    private static CountDownLatch startLatch; // Add latch for synchronization
 
     static {
         for (int i = 0; i < 4; i++) {
@@ -56,7 +54,7 @@ public class Swimmer extends Thread {
     }  
     private final SwimStroke swimStroke;
 
-    // Constructor with CountDownLatch
+    // Updated Constructor with CountDownLatch
     Swimmer(int ID, int t, PeopleLocation loc, FinishCounter f, int speed, SwimStroke s, CountDownLatch startLatch) {
         this.swimStroke = s;
         this.ID = ID;
@@ -66,8 +64,10 @@ public class Swimmer extends Thread {
         this.start = stadium.returnStartingBlock(team);
         this.finish = f;
         this.rand = new Random();
-        // Swimmer.startLatch = startLatch; // Initialize latch if needed for other purposes
+        Swimmer.startLatch = startLatch; // Initialize latch
     }
+
+    // Getter methods...
 
     public void enterStadium() throws InterruptedException {
         currentBlock = stadium.enterStadium(myLocation);
@@ -116,28 +116,45 @@ public class Swimmer extends Thread {
 
     public void run() {
         try {
-            sleep(movingSpeed + (rand.nextInt(10))); // arriving takes a while
+            // Step 1: Enter the stadium and move to the starting blocks
+            sleep(movingSpeed + (rand.nextInt(10))); // Delay to simulate different arrival times
             myLocation.setArrived();
             enterStadium();
             goToStartingBlocks();
-
-            // Wait for all swimmers of the same stroke to arrive at the starting blocks
+    
+            // Step 2: Wait for all swimmers of the same stroke to arrive at the starting blocks
+            System.out.println("Swimmer " + ID + " waiting at start barrier for stroke " + swimStroke.getOrder());
             barriers[3].await(); 
-
-            dive();
-            swimRace();
-
-            // Wait for all swimmers to reach the finish line
-            finishLineBarrier.await(); 
-
-            if (swimStroke.getOrder() == 4) {
-                finish.finishRace(ID, team); // finish line
+            
+            // Step 3: Begin swimming only if it's this swimmer's turn in the relay
+            if (swimStroke.getOrder() == 1) { // Backstroke (first stroke) starts immediately
+                dive();
+                swimRace();
             } else {
-                exitPool(); // if not the last swimmer, leave pool
+                synchronized (finish) { 
+                    while (!finish.isPreviousStrokeCompleted(team, swimStroke.getOrder())) {
+                        finish.wait(); // Wait until the previous stroke is completed for this team
+                    }
+                }
+                dive();
+                swimRace();
             }
-
+    
+            // Step 4: Signal that this swimmer has completed their leg of the race
+            synchronized (finish) {
+                finish.markStrokeCompleted(team, swimStroke.getOrder());
+                finish.notifyAll(); // Notify all waiting swimmers
+            }
+            
+            // Step 5: If this is the final swimmer (freestyle), finish the race
+            if (swimStroke.getOrder() == 4) {
+                finish.finishRace(ID, team);
+            } else {
+                exitPool(); // Earlier swimmers exit the pool
+            }
+    
         } catch (InterruptedException | BrokenBarrierException e) {
             e.printStackTrace();
         }
     }
-}
+}    
